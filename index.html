@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Daily Routine Tracker</title>
+  
+  <!-- PWA & Mobile Settings -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Habit Tracker">
+  <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/10620/10620868.png">
+
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --success: #22c55e;
+      --danger: #ef4444;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
+    body { background: var(--bg); color: var(--text); padding: 20px; max-width: 600px; margin: 0 auto; }
+    
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+    h1 { font-size: 1.25rem; font-weight: 600; }
+
+    /* Install Banner */
+    #install-banner {
+      display: none;
+      background: var(--accent);
+      color: white;
+      padding: 12px 16px;
+      border-radius: 10px;
+      margin-bottom: 20px;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+    }
+    #install-banner button {
+      background: white;
+      color: var(--accent);
+      border: none;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    
+    .add-form { display: flex; gap: 8px; margin-bottom: 24px; }
+    input, select {
+      background: var(--card); border: 1px solid #334155; color: var(--text);
+      padding: 10px 14px; border-radius: 8px; font-size: 0.9rem; outline: none;
+    }
+    input[type="text"] { flex: 1; }
+    
+    button {
+      background: var(--accent); color: white; border: none; padding: 10px 16px;
+      border-radius: 8px; cursor: pointer; font-weight: 500; transition: background 0.2s;
+    }
+    button:hover { background: var(--accent-hover); }
+    .btn-danger { background: transparent; color: var(--danger); padding: 6px 10px; font-size: 0.8rem; }
+    .btn-danger:hover { background: rgba(239, 68, 68, 0.1); }
+
+    .card {
+      background: var(--card); border-radius: 12px; padding: 16px; margin-bottom: 16px;
+      border: 1px solid #334155; display: flex; flex-direction: column; gap: 12px;
+    }
+    .card-header { display: flex; justify-content: space-between; align-items: center; }
+    .title { font-weight: 600; font-size: 1rem; }
+    .meta { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+    
+    .check-grid { display: flex; gap: 8px; align-items: center; }
+    .check-btn {
+      flex: 1; height: 44px; border-radius: 8px; border: 1px solid #334155;
+      background: #0f172a; color: var(--muted); font-weight: bold; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; transition: all 0.2s;
+    }
+    .check-btn.completed { background: var(--success); color: white; border-color: var(--success); }
+    
+    .logs { font-size: 0.75rem; color: var(--muted); border-top: 1px dashed #334155; padding-top: 8px; }
+    .log-item { display: inline-block; background: #0f172a; padding: 2px 6px; border-radius: 4px; margin: 2px; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>Daily Routine Tracker</h1>
+    <span id="current-date" class="meta"></span>
+  </header>
+
+  <!-- Add to Home Screen Prompt -->
+  <div id="install-banner">
+    <span>📲 Install App for quick access</span>
+    <button id="install-btn">Install</button>
+  </div>
+
+  <!-- Form to add new routines -->
+  <form class="add-form" id="habit-form">
+    <input type="text" id="habit-name" placeholder="Routine name..." required>
+    <select id="habit-type">
+      <option value="5">Every 2 Hours (5x/day)</option>
+      <option value="3">Every 4 Hours (3x/day)</option>
+    </select>
+    <button type="submit">Add</button>
+  </form>
+
+  <!-- Habit List -->
+  <div id="habit-list"></div>
+
+  <script>
+    // --- 1. Service Worker Registration ---
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js')
+        .then(() => console.log('Service Worker Registered'));
+    }
+
+    // --- 2. Add to Home Screen Logic ---
+    let deferredPrompt;
+    const installBanner = document.getElementById('install-banner');
+    const installBtn = document.getElementById('install-btn');
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      installBanner.style.display = 'flex';
+    });
+
+    installBtn.addEventListener('click', () => {
+      installBanner.style.display = 'none';
+      if (deferredPrompt) {
+        deferredPrompt.prompt();
+        deferredPrompt.userChoice.then((choiceResult) => {
+          if (choiceResult.outcome === 'accepted') {
+            console.log('User installed the app');
+          }
+          deferredPrompt = null;
+        });
+      }
+    });
+
+    // --- 3. Habit Tracker Core Logic ---
+    const STORAGE_KEY = 'daily_tracker_habits_v2';
+    
+    let habits = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [
+      { id: '1', name: 'Hydration / Stretch', target: 5, checks: [], logs: [] },
+      { id: '2', name: 'Focus / Eye Break', target: 3, checks: [], logs: [] }
+    ];
+
+    const todayStr = new Date().toISOString().split('T')[0];
+
+    function init() {
+      document.getElementById('current-date').textContent = new Date().toLocaleDateString(undefined, {
+        weekday: 'short', month: 'short', day: 'numeric'
+      });
+      
+      habits.forEach(habit => {
+        if (habit.lastDate !== todayStr) {
+          habit.checks = new Array(habit.target).fill(false);
+          habit.lastDate = todayStr;
+        }
+      });
+      saveAndRender();
+    }
+
+    function saveAndRender() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(habits));
+      render();
+    }
+
+    function toggleCheck(habitId, index) {
+      const habit = habits.find(h => h.id === habitId);
+      if (!habit) return;
+
+      const currentState = habit.checks[index];
+      habit.checks[index] = !currentState;
+
+      const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      
+      if (!currentState) {
+        habit.logs.unshift(`Slot ${index + 1}: ${timeNow}`);
+      } else {
+        habit.logs = habit.logs.filter(log => !log.startsWith(`Slot ${index + 1}:`));
+      }
+
+      saveAndRender();
+    }
+
+    function deleteHabit(habitId) {
+      if (confirm('Delete this item?')) {
+        habits = habits.filter(h => h.id !== habitId);
+        saveAndRender();
+      }
+    }
+
+    document.getElementById('habit-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const input = document.getElementById('habit-name');
+      const target = parseInt(document.getElementById('habit-type').value);
+
+      const newHabit = {
+        id: Date.now().toString(),
+        name: input.value.trim(),
+        target: target,
+        checks: new Array(target).fill(false),
+        logs: [],
+        lastDate: todayStr
+      };
+
+      habits.push(newHabit);
+      input.value = '';
+      saveAndRender();
+    });
+
+    function render() {
+      const listEl = document.getElementById('habit-list');
+      listEl.innerHTML = '';
+
+      habits.forEach(habit => {
+        const card = document.createElement('div');
+        card.className = 'card';
+
+        const intervalText = habit.target === 5 ? 'Every 2 hrs' : 'Every 4 hrs';
+
+        let buttonsHTML = '';
+        for (let i = 0; i < habit.target; i++) {
+          const isChecked = habit.checks[i];
+          buttonsHTML += `
+            <button 
+              class="check-btn ${isChecked ? 'completed' : ''}" 
+              onclick="toggleCheck('${habit.id}', ${i})"
+            >
+              ${isChecked ? '✓' : i + 1}
+            </button>
+          `;
+        }
+
+        let logsHTML = habit.logs.length > 0
+          ? habit.logs.slice(0, 5).map(l => `<span class="log-item">${l}</span>`).join(' ')
+          : 'No timestamps saved today.';
+
+        card.innerHTML = `
+          <div class="card-header">
+            <div>
+              <div class="title">${habit.name}</div>
+              <div class="meta">${intervalText} • ${habit.target} checks/day</div>
+            </div>
+            <button class="btn-danger" onclick="deleteHabit('${habit.id}')">Delete</button>
+          </div>
+          <div class="check-grid">${buttonsHTML}</div>
+          <div class="logs">Today's Timestamps: ${logsHTML}</div>
+        `;
+
+        listEl.appendChild(card);
+      });
+    }
+
+    init();
+  </script>
+</body>
+</html>
